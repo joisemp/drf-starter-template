@@ -1,0 +1,7 @@
+-r base.txt
+
+# JSON structured logging
+python-json-logger==2.0.7
+
+# Error tracking (optional — set SENTRY_DSN env var to enable)
+sentry-sdk[django]==2.19.2
