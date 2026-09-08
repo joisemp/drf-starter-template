@@ -14,14 +14,14 @@ DEBUG = True
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
 # ---------------------------------------------------------------------------
-# Static files — WhiteNoise serves locally in dev
+# Static files — simple storage in dev (no manifest hashing needed)
 # ---------------------------------------------------------------------------
 STORAGES = {
     "default": {
         "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
 
