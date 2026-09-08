@@ -23,9 +23,9 @@ RUN pip install --upgrade pip && pip install -r /tmp/requirements/development.tx
 # Copy project
 COPY . .
 
-# Entrypoint
+# Entrypoint — strip Windows CRLF line endings if present
 COPY docker/api/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 EXPOSE 8000
 

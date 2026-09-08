@@ -42,9 +42,9 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* && rm -
 # Copy project source
 COPY . .
 
-# Entrypoint
+# Entrypoint — strip Windows CRLF line endings if present
 COPY docker/api/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Non-root user for security
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
