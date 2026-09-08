@@ -17,8 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-COPY requirements/development.txt /tmp/requirements.txt
-RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
+COPY requirements/ /tmp/requirements/
+RUN pip install --upgrade pip && pip install -r /tmp/requirements/development.txt
 
 # Copy project
 COPY . .
