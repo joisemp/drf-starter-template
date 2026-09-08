@@ -115,7 +115,7 @@ POST /api/auth/register/
 ### 2. Login
 
 ```
-POST /api/auth/token/
+POST /api/auth/login/
 ```
 
 **Request body:**
@@ -511,7 +511,7 @@ const register = async (email, password, password2, firstName, lastName) => {
 
 ```js
 const login = async (email, password) => {
-  const { data } = await api.post('/api/auth/token/', { email, password });
+  const { data } = await api.post('/api/auth/login/', { email, password });
   setAccessToken(data.access);
   setRefreshToken(data.refresh);
   return data;

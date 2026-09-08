@@ -17,7 +17,7 @@ urlpatterns = [
     path("register/", RegisterView.as_view(), name="register"),
 
     # JWT token endpoints
-    path("token/", TokenObtainPairView.as_view(), name="token-obtain"),
+    path("login/", TokenObtainPairView.as_view(), name="token-obtain"),
     path("token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
     path("token/verify/", TokenVerifyView.as_view(), name="token-verify"),
 
