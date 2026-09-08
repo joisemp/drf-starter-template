@@ -222,11 +222,33 @@ SERVER_EMAIL = DEFAULT_FROM_EMAIL
 # ---------------------------------------------------------------------------
 SPECTACULAR_SETTINGS = {
     "TITLE": "Inveno API",
-    "DESCRIPTION": "Professional async Django REST Framework API",
+    "DESCRIPTION": (
+        "The **Inveno** REST API — JWT-authenticated, async-ready, and fully documented.\n\n"
+        "### Authentication\n"
+        "Obtain a token pair from `POST /api/auth/login/`, then click **Authorize** and enter:\n"
+        "```\nBearer <access_token>\n```\n\n"
+        "### Resources\n"
+        "| Tag | Base path |\n"
+        "|-----|-----------|\n"
+        "| Auth | `/api/auth/` |\n"
+        "| System | `/api/health/` |"
+    ),
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
     "SCHEMA_PATH_PREFIX": "/api/",
+    # ── Swagger UI behaviour ──────────────────────────────────────
+    "SWAGGER_UI_SETTINGS": {
+        "persistAuthorization": True,
+        "filter": True,
+        "displayRequestDuration": True,
+        "docExpansion": "list",
+        "defaultModelsExpandDepth": 1,
+        "syntaxHighlight.theme": "tomorrow",
+    },
+    "SWAGGER_UI_FAVICON_HREF": "https://raw.githubusercontent.com/swagger-api/swagger-ui/master/src/img/favicon-32x32.png",
+    "SORT_OPERATIONS": False,
+    "TAGS_SORTER": "alpha",
 }
 
 # ---------------------------------------------------------------------------
