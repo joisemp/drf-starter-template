@@ -33,7 +33,12 @@ docker compose up --build
 ### 3. Create a superuser
 
 ```bash
+# Local dev stack
 docker compose exec api python manage.py createsuperuser
+
+# Frontend dev stack (using the GHCR image)
+docker compose -f docker-compose.frontend-dev.yml exec api python manage.py createsuperuser
+
 # Enter: email, password (no username — email is the login)
 ```
 
