@@ -4,9 +4,22 @@ DB and Redis are managed services; static/media served from DigitalOcean Spaces.
 """
 import os
 
+import dj_database_url
 from decouple import config
 
 from .base import *  # noqa: F401, F403
+
+# ---------------------------------------------------------------------------
+# Database — single URL from Railway / managed Postgres
+# ---------------------------------------------------------------------------
+DATABASES = {
+    "default": dj_database_url.config(
+        default=config("DATABASE_URL"),
+        conn_max_age=600,
+        conn_health_checks=True,
+        ssl_require=True,
+    )
+}
 
 # ---------------------------------------------------------------------------
 # Security

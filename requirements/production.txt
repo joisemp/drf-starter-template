@@ -1,5 +1,8 @@
 -r base.txt
 
+# Database URL parsing (Railway DATABASE_URL)
+dj-database-url==2.3.0
+
 # JSON structured logging
 python-json-logger==2.0.7
 

@@ -86,21 +86,28 @@ See [`.env.example`](.env.example) for the full list with descriptions.
 | Variable | Description |
 |---|---|
 | `DJANGO_SECRET_KEY` | Django secret key (generate with `python -c "import secrets; print(secrets.token_hex(50))"`) |
+| `REDIS_URL` | Redis connection URL |
+
+### Local Docker only
+
+| Variable | Description |
+|---|---|
 | `POSTGRES_DB` | Database name |
 | `POSTGRES_USER` | Database user |
 | `POSTGRES_PASSWORD` | Database password |
-| `POSTGRES_HOST` | Database host (`db` in Docker, managed host in prod) |
-| `REDIS_URL` | Redis connection URL |
+| `POSTGRES_HOST` | Database host (`db` in Compose) |
+| `POSTGRES_PORT` | Database port (`5432`) |
 
 ### Production only (Railway)
 
-Railway automatically injects `DATABASE_URL` and `REDIS_URL` when you add Postgres/Redis plugins. Set these manually in the Railway service environment:
+Railway automatically injects `DATABASE_URL` and `REDIS_URL` when you add Postgres/Redis plugins. Production settings parse `DATABASE_URL` — do not set `POSTGRES_*` on Railway.
 
 | Variable | Description |
 |---|---|
 | `DJANGO_SETTINGS_MODULE` | Set to `config.settings.production` |
 | `DJANGO_SECRET_KEY` | Strong secret key |
 | `DJANGO_ALLOWED_HOSTS` | Your Railway domain + custom domain |
+| `DATABASE_URL` | Injected by Railway Postgres (`postgresql://...`) |
 | `CORS_ALLOWED_ORIGINS` | Your frontend URL(s) |
 | `DO_SPACES_KEY` | DigitalOcean Spaces access key |
 | `DO_SPACES_SECRET` | DigitalOcean Spaces secret key |
