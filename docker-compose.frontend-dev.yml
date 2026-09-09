@@ -22,7 +22,7 @@ services:
 
   # ── API (pre-built image) ──────────────────────────────────────────────────
   api:
-    image: ghcr.io/joisemp/inveno-api:dev   # ← replace YOUR_GITHUB_ORG | updated on every merge to main
+    image: ghcr.io/joisemp/inveno-backend:dev
     env_file: .env.api
     ports:
       - "8000:8000"
