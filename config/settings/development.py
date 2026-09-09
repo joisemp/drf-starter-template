@@ -69,11 +69,15 @@ LOGGING = {
 }
 
 # ---------------------------------------------------------------------------
-# Django Debug Toolbar
+# Django Debug Toolbar (only when installed — not available in prod image)
 # ---------------------------------------------------------------------------
-INSTALLED_APPS += ["debug_toolbar"]  # noqa: F405
-MIDDLEWARE += ["debug_toolbar.middleware.DebugToolbarMiddleware"]  # noqa: F405
-INTERNAL_IPS = ["127.0.0.1", "::1"]
+try:
+    import debug_toolbar  # noqa: F401
+    INSTALLED_APPS += ["debug_toolbar"]  # noqa: F405
+    MIDDLEWARE += ["debug_toolbar.middleware.DebugToolbarMiddleware"]  # noqa: F405
+    INTERNAL_IPS = ["127.0.0.1", "::1"]
+except ImportError:
+    pass
 
 # ---------------------------------------------------------------------------
 # Throttle — relax in dev
