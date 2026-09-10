@@ -41,7 +41,9 @@ THIRD_PARTY_APPS = [
 ]
 
 LOCAL_APPS = [
+    "apps.common",
     "apps.users",
+    "apps.organizations",
     "apps.healthcheck",
 ]
 
