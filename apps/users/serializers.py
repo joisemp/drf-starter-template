@@ -5,19 +5,22 @@ Auth serializers
 ----------------
 CustomTokenObtainPairSerializer — adds user_type / org_id / org_suffix JWT
                                   claims and checks org.is_active on login.
+CustomTokenRefreshSerializer    — cookie-only refresh (no JSON body token).
 MeSerializer                   — read + patch view for the authenticated user.
 ChangePasswordSerializer        — change password (requires old password).
 PasswordResetRequestSerializer  — request a forgot-password email.
 PasswordResetConfirmSerializer  — confirm forgot-password with uid + token.
 PasswordSetupSerializer         — set password from the welcome-email link.
 """
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from rest_framework import serializers
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.exceptions import InvalidToken
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 
 User = get_user_model()
 
@@ -67,6 +70,23 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 pass
 
         return data
+
+
+class CustomTokenRefreshSerializer(TokenRefreshSerializer):
+    """
+    Rotate the access token using the httpOnly refresh cookie only.
+
+    A refresh JWT in the JSON body is ignored. Missing cookie → 401.
+    """
+
+    refresh = serializers.CharField(required=False, write_only=True)
+
+    def validate(self, attrs):
+        token = self.context["request"].COOKIES.get(settings.REFRESH_TOKEN_COOKIE_NAME)
+        if not token:
+            raise InvalidToken("Refresh cookie is missing.")
+        attrs["refresh"] = token
+        return super().validate(attrs)
 
 
 # ---------------------------------------------------------------------------

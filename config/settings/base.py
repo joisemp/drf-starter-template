@@ -17,6 +17,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 SECRET_KEY = config("DJANGO_SECRET_KEY")
 ALLOWED_HOSTS = config("DJANGO_ALLOWED_HOSTS", default="*", cast=Csv())
 
+# Display name in Swagger, welcome email, and password-reset sign-off.
+PROJECT_NAME = config("PROJECT_NAME", default="API")
+
+# Optional dedicated HMAC key for JWTs. If unset, DJANGO_SECRET_KEY is used.
+JWT_SIGNING_KEY = config("JWT_SIGNING_KEY", default="") or SECRET_KEY
+
 # ---------------------------------------------------------------------------
 # Application definition
 # ---------------------------------------------------------------------------
@@ -96,9 +102,9 @@ AUTH_USER_MODEL = "users.User"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": config("POSTGRES_DB", default="inveno"),
-        "USER": config("POSTGRES_USER", default="inveno"),
-        "PASSWORD": config("POSTGRES_PASSWORD", default="inveno"),
+        "NAME": config("POSTGRES_DB", default="dev"),
+        "USER": config("POSTGRES_USER", default="dev"),
+        "PASSWORD": config("POSTGRES_PASSWORD", default="dev"),
         "HOST": config("POSTGRES_HOST", default="db"),
         "PORT": config("POSTGRES_PORT", default="5432"),
     }
@@ -185,6 +191,7 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
     "ALGORITHM": "HS256",
+    "SIGNING_KEY": JWT_SIGNING_KEY,
     "AUTH_HEADER_TYPES": ("Bearer",),
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
@@ -204,6 +211,15 @@ CORS_ALLOWED_ORIGINS = config(
 CORS_ALLOW_CREDENTIALS = True
 
 # ---------------------------------------------------------------------------
+# HttpOnly refresh cookie (login / refresh / logout)
+# ---------------------------------------------------------------------------
+REFRESH_TOKEN_COOKIE_NAME = config("REFRESH_COOKIE_NAME", default="dev_refresh")
+REFRESH_TOKEN_COOKIE_PATH = "/api/auth/"
+REFRESH_TOKEN_COOKIE_SAMESITE = config("REFRESH_COOKIE_SAMESITE", default="Lax")
+# Overridden to True in production.py.
+REFRESH_TOKEN_COOKIE_SECURE = False
+
+# ---------------------------------------------------------------------------
 # Celery
 # ---------------------------------------------------------------------------
 CELERY_BROKER_URL = REDIS_URL
@@ -220,19 +236,23 @@ CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
 # ---------------------------------------------------------------------------
 # Email (overridden per environment)
 # ---------------------------------------------------------------------------
-DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@inveno.app")
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@localhost")
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 # ---------------------------------------------------------------------------
 # drf-spectacular (API Docs)
 # ---------------------------------------------------------------------------
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Inveno API",
+    "TITLE": PROJECT_NAME,
     "DESCRIPTION": (
-        "The **Inveno** REST API — JWT-authenticated, async-ready, and fully documented.\n\n"
+        f"The **{PROJECT_NAME}** REST API — JWT-authenticated, async-ready, "
+        "and fully documented.\n\n"
         "### Authentication\n"
-        "Obtain a token pair from `POST /api/auth/login/`, then click **Authorize** and enter:\n"
+        "Obtain an access token from `POST /api/auth/login/` (refresh is an "
+        "httpOnly cookie). Click **Authorize** and enter:\n"
         "```\nBearer <access_token>\n```\n\n"
+        "React + Vite integration is on the "
+        "**[Frontend](/api/docs/frontend/)** tab.\n\n"
         "### Resources\n"
         "| Tag | Base path |\n"
         "|-----|-----------|\n"

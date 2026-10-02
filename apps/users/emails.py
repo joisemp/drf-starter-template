@@ -35,14 +35,15 @@ def send_welcome_email(user) -> None:
 
     try:
         full_name = user.profile.full_name
-        org_name = user.profile.org.name if user.profile.org else "Inveno"
+        org_name = user.profile.org.name if user.profile.org else settings.PROJECT_NAME
     except Exception:
         full_name = user.email
-        org_name = "Inveno"
+        org_name = settings.PROJECT_NAME
 
     context = {
         "full_name": full_name,
         "org_name": org_name,
+        "project_name": settings.PROJECT_NAME,
         "get_started_url": get_started_url,
     }
 

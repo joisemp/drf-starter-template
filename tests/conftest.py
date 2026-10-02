@@ -1,5 +1,5 @@
 """
-Shared pytest fixtures for the Inveno test suite.
+Shared pytest fixtures for the test suite.
 
 Fixtures
 --------

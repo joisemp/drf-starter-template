@@ -6,6 +6,7 @@ forgot-password flow.  Registration tests have been removed — accounts are
 created through the org-registration service (see tests/organizations/).
 """
 import pytest
+from django.conf import settings
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -16,7 +17,31 @@ ME_URL = "/api/auth/me/"
 LOGOUT_URL = "/api/auth/logout/"
 CHANGE_PASSWORD_URL = "/api/auth/password/change/"
 PASSWORD_RESET_URL = "/api/auth/password/reset/"
+PASSWORD_RESET_CONFIRM_URL = "/api/auth/password/reset/confirm/"
 REGISTER_URL = "/api/auth/register/"  # should be gone (404 / 405)
+
+REFRESH_COOKIE = settings.REFRESH_TOKEN_COOKIE_NAME
+
+
+@pytest.fixture(autouse=True)
+def _clear_auth_throttle_cache():
+    """Auth throttles share Redis; isolate tests from leftover 429 counters."""
+    from django.core.cache import cache
+
+    cache.clear()
+    yield
+    cache.clear()
+
+
+def _refresh_cookie_value(response):
+    """Return the refresh cookie string from a response, if set."""
+    cookie = response.cookies.get(REFRESH_COOKIE)
+    return cookie.value if cookie else None
+
+
+def _cookie_is_httponly(response):
+    cookie = response.cookies.get(REFRESH_COOKIE)
+    return cookie is not None and cookie.get("httponly", False)
 
 
 @pytest.mark.django_db
@@ -41,7 +66,9 @@ class TestLogin:
         )
         assert response.status_code == 200
         assert "access" in response.data
-        assert "refresh" in response.data
+        assert "refresh" not in response.data
+        assert _refresh_cookie_value(response)
+        assert _cookie_is_httponly(response)
 
     def test_login_returns_jwt_claims(self, api_client, test_user):
         """JWT payload should include user_type, org_id, org_suffix."""
@@ -52,10 +79,8 @@ class TestLogin:
             LOGIN_URL, {"email": test_user.email, "password": "StrongPass123!"}
         )
         assert response.status_code == 200
-        # Decode payload (middle part of access token)
         access = response.data["access"]
         payload_b64 = access.split(".")[1]
-        # Add padding if needed
         payload_b64 += "=" * (4 - len(payload_b64) % 4)
         payload = json.loads(base64.b64decode(payload_b64))
         assert "user_type" in payload
@@ -97,10 +122,45 @@ class TestTokenRefresh:
         login = api_client.post(
             LOGIN_URL, {"email": test_user.email, "password": "StrongPass123!"}
         )
-        refresh = login.data["refresh"]
-        response = api_client.post(TOKEN_REFRESH_URL, {"refresh": refresh})
+        assert login.status_code == 200
+        response = api_client.post(TOKEN_REFRESH_URL)
         assert response.status_code == 200
         assert "access" in response.data
+        assert "refresh" not in response.data
+        assert _refresh_cookie_value(response)
+
+    def test_refresh_without_cookie_is_401(self, api_client):
+        response = api_client.post(TOKEN_REFRESH_URL)
+        assert response.status_code == 401
+
+    def test_refresh_ignores_json_body_without_cookie(self, api_client, test_user):
+        """A refresh JWT in the JSON body must not work; cookie is required."""
+        login = api_client.post(
+            LOGIN_URL, {"email": test_user.email, "password": "StrongPass123!"}
+        )
+        stolen = _refresh_cookie_value(login)
+        assert stolen
+        api_client.cookies.pop(REFRESH_COOKIE, None)
+        response = api_client.post(
+            TOKEN_REFRESH_URL, {"refresh": stolen}, format="json"
+        )
+        assert response.status_code == 401
+        assert "refresh" not in (response.data or {})
+
+    def test_refresh_rotates_and_blacklists_old_cookie(self, api_client, test_user):
+        login = api_client.post(
+            LOGIN_URL, {"email": test_user.email, "password": "StrongPass123!"}
+        )
+        old_refresh = _refresh_cookie_value(login)
+
+        rotated = api_client.post(TOKEN_REFRESH_URL)
+        assert rotated.status_code == 200
+        new_refresh = _refresh_cookie_value(rotated)
+        assert new_refresh != old_refresh
+
+        api_client.cookies[REFRESH_COOKIE] = old_refresh
+        stale = api_client.post(TOKEN_REFRESH_URL)
+        assert stale.status_code == 401
 
 
 @pytest.mark.django_db
@@ -144,16 +204,19 @@ class TestLogout:
         login = api_client.post(
             LOGIN_URL, {"email": test_user.email, "password": "StrongPass123!"}
         )
-        refresh = login.data["refresh"]
-        access = login.data["access"]
+        assert login.status_code == 200
+        old_refresh = _refresh_cookie_value(login)
 
-        api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
-        logout_response = api_client.post(LOGOUT_URL, {"refresh": refresh})
+        logout_response = api_client.post(LOGOUT_URL)
         assert logout_response.status_code == 200
 
-        # Blacklisted refresh token must not be reusable
-        refresh_response = api_client.post(TOKEN_REFRESH_URL, {"refresh": refresh})
+        api_client.cookies[REFRESH_COOKIE] = old_refresh
+        refresh_response = api_client.post(TOKEN_REFRESH_URL)
         assert refresh_response.status_code == 401
+
+    def test_logout_without_cookie_still_succeeds(self, api_client):
+        response = api_client.post(LOGOUT_URL)
+        assert response.status_code == 200
 
 
 @pytest.mark.django_db
@@ -165,6 +228,34 @@ class TestPasswordReset:
     def test_reset_request_nonexistent_email(self, api_client):
         response = api_client.post(PASSWORD_RESET_URL, {"email": "ghost@example.com"})
         assert response.status_code == 200  # anti-enumeration
+
+    def test_reset_confirm_revokes_refresh_cookie(self, api_client, test_user):
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+
+        login = api_client.post(
+            LOGIN_URL, {"email": test_user.email, "password": "StrongPass123!"}
+        )
+        old_refresh = _refresh_cookie_value(login)
+        test_user.refresh_from_db()
+        uid = urlsafe_base64_encode(force_bytes(test_user.pk))
+        token = default_token_generator.make_token(test_user)
+
+        confirm = api_client.post(
+            PASSWORD_RESET_CONFIRM_URL,
+            {
+                "uid": uid,
+                "token": token,
+                "new_password": "ResetPass789!",
+                "new_password2": "ResetPass789!",
+            },
+        )
+        assert confirm.status_code == 200
+
+        api_client.cookies[REFRESH_COOKIE] = old_refresh
+        refresh = api_client.post(TOKEN_REFRESH_URL)
+        assert refresh.status_code == 401
 
 
 @pytest.mark.django_db
@@ -188,3 +279,58 @@ class TestChangePassword:
         }
         response = auth_client.post(CHANGE_PASSWORD_URL, payload)
         assert response.status_code == 400
+
+    def test_change_password_revokes_refresh_cookie(self, api_client, test_user):
+        login = api_client.post(
+            LOGIN_URL, {"email": test_user.email, "password": "StrongPass123!"}
+        )
+        access = login.data["access"]
+        old_refresh = _refresh_cookie_value(login)
+
+        api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+        change = api_client.post(
+            CHANGE_PASSWORD_URL,
+            {
+                "old_password": "StrongPass123!",
+                "new_password": "NewStrong456!",
+                "new_password2": "NewStrong456!",
+            },
+        )
+        assert change.status_code == 200
+
+        api_client.cookies[REFRESH_COOKIE] = old_refresh
+        refresh = api_client.post(TOKEN_REFRESH_URL)
+        assert refresh.status_code == 401
+
+
+@pytest.mark.django_db
+class TestAuthThrottle:
+    def test_login_throttled_after_rate_limit(self, api_client, monkeypatch):
+        from django.core.cache import cache
+
+        from apps.users.views import AuthRateThrottle
+
+        monkeypatch.setattr(AuthRateThrottle, "get_rate", lambda self: "1/min")
+        cache.clear()
+        try:
+            api_client.post(LOGIN_URL, {"email": "nobody@example.com", "password": "x"})
+            second = api_client.post(
+                LOGIN_URL, {"email": "nobody@example.com", "password": "x"}
+            )
+            assert second.status_code == 429
+        finally:
+            cache.clear()
+
+    def test_refresh_throttled_after_rate_limit(self, api_client, monkeypatch):
+        from django.core.cache import cache
+
+        from apps.users.views import AuthRateThrottle
+
+        monkeypatch.setattr(AuthRateThrottle, "get_rate", lambda self: "1/min")
+        cache.clear()
+        try:
+            api_client.post(TOKEN_REFRESH_URL)
+            second = api_client.post(TOKEN_REFRESH_URL)
+            assert second.status_code == 429
+        finally:
+            cache.clear()

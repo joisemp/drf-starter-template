@@ -9,6 +9,9 @@ ChangePasswordView      POST /api/auth/password/change/
 PasswordResetRequestView POST /api/auth/password/reset/
 PasswordResetConfirmView POST /api/auth/password/reset/confirm/
 PasswordSetView          POST /api/auth/password/set/   (welcome-email link)
+LoginView               POST /api/auth/login/
+TokenRefreshView        POST /api/auth/token/refresh/
+TokenVerifyView         POST /api/auth/token/verify/
 
 Note: user registration (POST /api/auth/register/) has been removed.
 Accounts are created by super admins through Django Admin using the
@@ -16,19 +19,47 @@ organisation registration flow.
 """
 import logging
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import send_mail
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+)
 from rest_framework import generics, permissions, status
+from rest_framework.parsers import JSONParser
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import (
+    TokenObtainPairView,
+    TokenRefreshView as SimpleJWTTokenRefreshView,
+    TokenVerifyView as SimpleJWTTokenVerifyView,
+)
 
+from apps.common.openapi import (
+    EmptySerializer,
+    LoginRequestSerializer,
+    TokenPairSerializer,
+    TokenVerifyRequestSerializer,
+    detail_response,
+    error_responses,
+)
+
+from .auth_cookies import (
+    attach_rotated_refresh_cookie,
+    blacklist_user_refresh_tokens,
+    clear_refresh_cookie,
+)
 from .serializers import (
     ChangePasswordSerializer,
+    CustomTokenRefreshSerializer,
     MeSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
@@ -40,15 +71,63 @@ User = get_user_model()
 
 
 class AuthRateThrottle(AnonRateThrottle):
-    rate = "10/min"
+    """Auth endpoints: 10/min in production, 100/min in development."""
+
     scope = "auth"
+
+
+def field_error_response(*examples):
+    """OpenAPI 400 body for serializer field errors."""
+    flat = []
+    for item in examples:
+        if isinstance(item, (list, tuple)):
+            flat.extend(item)
+        else:
+            flat.append(item)
+    return OpenApiResponse(
+        response=OpenApiTypes.OBJECT,
+        description="Validation error.",
+        examples=flat,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Profile — GET / PATCH /api/auth/me/
 # ---------------------------------------------------------------------------
 
-@extend_schema(tags=["Auth"])
+@extend_schema_view(
+    get=extend_schema(
+        tags=["Auth"],
+        summary="Get my profile",
+        responses={
+            200: MeSerializer,
+            **error_responses(401),
+        },
+    ),
+    patch=extend_schema(
+        tags=["Auth"],
+        summary="Update my profile",
+        request=MeSerializer,
+        responses={
+            200: MeSerializer,
+            400: field_error_response(
+                [
+                    OpenApiExample(
+                        "Validation",
+                        value={
+                            "phone": [
+                                "Ensure this field has no more than 30 characters."
+                            ]
+                        },
+                        response_only=True,
+                        status_codes=["400"],
+                    )
+                ]
+            ),
+            **error_responses(401),
+        },
+    ),
+)
 class MeView(generics.RetrieveUpdateAPIView):
     """
     Retrieve or update the authenticated user's profile.
@@ -69,36 +148,80 @@ class MeView(generics.RetrieveUpdateAPIView):
 # Logout — POST /api/auth/logout/
 # ---------------------------------------------------------------------------
 
-@extend_schema(tags=["Auth"])
+@extend_schema(
+    tags=["Auth"],
+    summary="Log out (blacklist refresh cookie)",
+    request=EmptySerializer,
+    responses={
+        200: detail_response(
+            "Refresh cookie cleared; token blacklisted when present.",
+            "Logged out",
+            {"detail": "Successfully logged out."},
+        ),
+        **error_responses(429),
+    },
+)
 class LogoutView(generics.GenericAPIView):
-    """Blacklist the refresh token to log out."""
+    """Blacklist the httpOnly refresh cookie and clear it from the browser."""
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
+    parser_classes = [JSONParser]
+    throttle_classes = [AuthRateThrottle]
 
     def post(self, request, *args, **kwargs):
-        try:
-            refresh_token = request.data.get("refresh")
-            if not refresh_token:
-                return Response(
-                    {"detail": "Refresh token is required."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            token = RefreshToken(refresh_token)
-            token.blacklist()
-            logger.info("User logged out: %s", request.user.email)
-            return Response({"detail": "Successfully logged out."})
-        except Exception:
-            return Response(
-                {"detail": "Invalid or already blacklisted token."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        refresh_token = request.COOKIES.get(settings.REFRESH_TOKEN_COOKIE_NAME)
+        response = Response({"detail": "Successfully logged out."})
+        if refresh_token:
+            try:
+                token = RefreshToken(refresh_token)
+                token.blacklist()
+                if request.user.is_authenticated:
+                    logger.info("User logged out: %s", request.user.email)
+            except Exception:
+                pass
+        clear_refresh_cookie(response)
+        return response
 
 
 # ---------------------------------------------------------------------------
 # Change password — POST /api/auth/password/change/
 # ---------------------------------------------------------------------------
 
-@extend_schema(tags=["Auth"])
+@extend_schema(
+    tags=["Auth"],
+    summary="Change password",
+    request=ChangePasswordSerializer,
+    responses={
+        200: detail_response(
+            "Password updated.",
+            "Updated",
+            {"detail": "Password updated successfully."},
+        ),
+        400: field_error_response(
+            [
+                OpenApiExample(
+                    "Wrong old password",
+                    value={"old_password": ["Old password is incorrect."]},
+                    response_only=True,
+                    status_codes=["400"],
+                ),
+                OpenApiExample(
+                    "Mismatch",
+                    value={"new_password2": ["Passwords do not match."]},
+                    response_only=True,
+                    status_codes=["400"],
+                ),
+                OpenApiExample(
+                    "Weak password",
+                    value={"new_password": ["This password is too common."]},
+                    response_only=True,
+                    status_codes=["400"],
+                ),
+            ]
+        ),
+        **error_responses(401),
+    },
+)
 class ChangePasswordView(generics.GenericAPIView):
     """Change password for the authenticated user (requires old password)."""
 
@@ -111,20 +234,49 @@ class ChangePasswordView(generics.GenericAPIView):
         request.user.set_password(serializer.validated_data["new_password"])
         request.user.save()
         logger.info("Password changed for user: %s", request.user.email)
-        return Response({"detail": "Password updated successfully."})
+        response = Response({"detail": "Password updated successfully."})
+        blacklist_user_refresh_tokens(request.user)
+        clear_refresh_cookie(response)
+        return response
 
 
 # ---------------------------------------------------------------------------
 # Password reset (forgot-password) — POST /api/auth/password/reset/
 # ---------------------------------------------------------------------------
 
-@extend_schema(tags=["Auth"])
+@extend_schema(
+    tags=["Auth"],
+    summary="Request password reset email",
+    request=PasswordResetRequestSerializer,
+    responses={
+        200: detail_response(
+            "Always 200 to prevent email enumeration.",
+            "Accepted",
+            {
+                "detail": (
+                    "If an account with that email exists, a reset link has been sent."
+                )
+            },
+        ),
+        400: field_error_response(
+            [
+                OpenApiExample(
+                    "Invalid email",
+                    value={"email": ["Enter a valid email address."]},
+                    response_only=True,
+                    status_codes=["400"],
+                )
+            ]
+        ),
+        **error_responses(429),
+    },
+)
 class PasswordResetRequestView(generics.GenericAPIView):
     """
     Request a password-reset email (forgot-password flow).
 
     Always returns 200 to prevent email enumeration.
-    In development, the email is printed to the terminal.
+    In development, the email is delivered to Mailpit (http://localhost:8025).
     """
 
     serializer_class = PasswordResetRequestSerializer
@@ -140,11 +292,7 @@ class PasswordResetRequestView(generics.GenericAPIView):
             user = User.objects.get(email=email)
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = default_token_generator.make_token(user)
-            frontend_url = getattr(
-                __import__("django.conf", fromlist=["settings"]).settings,
-                "FRONTEND_URL",
-                "http://localhost:5173",
-            )
+            frontend_url = settings.FRONTEND_URL
             reset_url = (
                 f"{frontend_url}/reset-password?uid={uid}&token={token}"
             )
@@ -155,7 +303,7 @@ class PasswordResetRequestView(generics.GenericAPIView):
                 f"{reset_url}\n\n"
                 f"This link expires in 1 hour.\n\n"
                 f"If you did not request this, please ignore this email.\n\n"
-                f"— The Inveno Team"
+                f"— The {settings.PROJECT_NAME} Team"
             )
             send_mail(subject, message, None, [email], fail_silently=False)
             logger.info("Password reset email sent to: %s", email)
@@ -167,7 +315,41 @@ class PasswordResetRequestView(generics.GenericAPIView):
         )
 
 
-@extend_schema(tags=["Auth"])
+@extend_schema(
+    tags=["Auth"],
+    summary="Confirm password reset",
+    request=PasswordResetConfirmSerializer,
+    responses={
+        200: detail_response(
+            "Password reset completed.",
+            "Reset",
+            {"detail": "Password has been reset successfully."},
+        ),
+        400: field_error_response(
+            [
+                OpenApiExample(
+                    "Invalid uid",
+                    value={"uid": ["Invalid reset link."]},
+                    response_only=True,
+                    status_codes=["400"],
+                ),
+                OpenApiExample(
+                    "Expired token",
+                    value={"token": ["Reset link is invalid or has expired."]},
+                    response_only=True,
+                    status_codes=["400"],
+                ),
+                OpenApiExample(
+                    "Mismatch",
+                    value={"new_password2": ["Passwords do not match."]},
+                    response_only=True,
+                    status_codes=["400"],
+                ),
+            ]
+        ),
+        **error_responses(429),
+    },
+)
 class PasswordResetConfirmView(generics.GenericAPIView):
     """Confirm password reset with uid + token from the forgot-password email."""
 
@@ -181,6 +363,7 @@ class PasswordResetConfirmView(generics.GenericAPIView):
         user = serializer.validated_data["user"]
         user.set_password(serializer.validated_data["new_password"])
         user.save()
+        blacklist_user_refresh_tokens(user)
         logger.info("Password reset completed for user: %s", user.email)
         return Response({"detail": "Password has been reset successfully."})
 
@@ -189,7 +372,51 @@ class PasswordResetConfirmView(generics.GenericAPIView):
 # Password setup — POST /api/auth/password/set/
 # ---------------------------------------------------------------------------
 
-@extend_schema(tags=["Auth"])
+@extend_schema(
+    tags=["Auth"],
+    summary="Set password from welcome email",
+    request=PasswordSetupSerializer,
+    responses={
+        200: detail_response(
+            "Password set; user must log in next.",
+            "Set",
+            {"detail": "Password set successfully. You can now log in."},
+        ),
+        400: field_error_response(
+            [
+                OpenApiExample(
+                    "Invalid uid",
+                    value={"uid": ["Invalid link."]},
+                    response_only=True,
+                    status_codes=["400"],
+                ),
+                OpenApiExample(
+                    "Expired token",
+                    value={
+                        "token": [
+                            "Link is invalid or has expired. Request a new welcome email."
+                        ]
+                    },
+                    response_only=True,
+                    status_codes=["400"],
+                ),
+                OpenApiExample(
+                    "Mismatch",
+                    value={"new_password2": ["Passwords do not match."]},
+                    response_only=True,
+                    status_codes=["400"],
+                ),
+                OpenApiExample(
+                    "Weak password",
+                    value={"new_password": ["This password is too common."]},
+                    response_only=True,
+                    status_codes=["400"],
+                ),
+            ]
+        ),
+        **error_responses(429),
+    },
+)
 class PasswordSetView(generics.GenericAPIView):
     """
     Set a password for the first time using the get-started link from the
@@ -216,3 +443,185 @@ class PasswordSetView(generics.GenericAPIView):
         return Response(
             {"detail": "Password set successfully. You can now log in."}
         )
+
+
+# ---------------------------------------------------------------------------
+# JWT — login / refresh / verify
+# ---------------------------------------------------------------------------
+
+@extend_schema(
+    tags=["Auth"],
+    summary="Log in (email + password)",
+    request=LoginRequestSerializer,
+    responses={
+        200: OpenApiResponse(
+            response=TokenPairSerializer,
+            description=(
+                "Access token (15 min) in JSON. Refresh token (7 days) is set as "
+                "an httpOnly cookie (REFRESH_COOKIE_NAME, default dev_refresh)."
+            ),
+            examples=[
+                OpenApiExample(
+                    "Access token",
+                    value={"access": "eyJ0eXAiOiJKV1QiLCJhbGci..."},
+                    response_only=True,
+                    status_codes=["200"],
+                )
+            ],
+        ),
+        400: field_error_response(
+            [
+                OpenApiExample(
+                    "Organisation suspended",
+                    value={
+                        "non_field_errors": [
+                            "Your organisation has been suspended. "
+                            "Please contact your administrator."
+                        ]
+                    },
+                    response_only=True,
+                    status_codes=["400"],
+                ),
+                OpenApiExample(
+                    "Missing fields",
+                    value={
+                        "email": ["This field is required."],
+                        "password": ["This field is required."],
+                    },
+                    response_only=True,
+                    status_codes=["400"],
+                ),
+            ]
+        ),
+        401: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="Wrong email or password.",
+            examples=[
+                OpenApiExample(
+                    "Bad credentials",
+                    value={
+                        "detail": "No active account found with the given credentials."
+                    },
+                    response_only=True,
+                    status_codes=["401"],
+                )
+            ],
+        ),
+        **error_responses(429),
+    },
+)
+class LoginView(TokenObtainPairView):
+    """Email + password → access JSON + httpOnly refresh cookie."""
+
+    throttle_classes = [AuthRateThrottle]
+
+    def finalize_response(self, request, response, *args, **kwargs):
+        response = super().finalize_response(request, response, *args, **kwargs)
+        return attach_rotated_refresh_cookie(response)
+
+
+@extend_schema(
+    tags=["Auth"],
+    summary="Refresh access token",
+    request=EmptySerializer,
+    responses={
+        200: OpenApiResponse(
+            response=TokenPairSerializer,
+            description=(
+                "New access token in JSON. Rotated refresh token is set as "
+                "an httpOnly cookie."
+            ),
+            examples=[
+                OpenApiExample(
+                    "Access token",
+                    value={"access": "eyJ0eXAiOiJKV1QiLCJhbGci..."},
+                    response_only=True,
+                    status_codes=["200"],
+                )
+            ],
+        ),
+        401: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="Missing, invalid, expired, or blacklisted refresh cookie.",
+            examples=[
+                OpenApiExample(
+                    "Missing cookie",
+                    value={
+                        "detail": "Refresh cookie is missing.",
+                        "code": "token_not_valid",
+                    },
+                    response_only=True,
+                    status_codes=["401"],
+                ),
+                OpenApiExample(
+                    "Invalid refresh",
+                    value={
+                        "detail": "Token is invalid or expired",
+                        "code": "token_not_valid",
+                    },
+                    response_only=True,
+                    status_codes=["401"],
+                ),
+            ],
+        ),
+        **error_responses(429),
+    },
+)
+class TokenRefreshView(SimpleJWTTokenRefreshView):
+    """Rotate access token; refresh is read from the httpOnly cookie."""
+
+    serializer_class = CustomTokenRefreshSerializer
+    parser_classes = [JSONParser]
+    throttle_classes = [AuthRateThrottle]
+
+    def finalize_response(self, request, response, *args, **kwargs):
+        response = super().finalize_response(request, response, *args, **kwargs)
+        return attach_rotated_refresh_cookie(response)
+
+
+@extend_schema(
+    tags=["Auth"],
+    summary="Verify a JWT",
+    request=TokenVerifyRequestSerializer,
+    responses={
+        200: OpenApiResponse(
+            response=EmptySerializer,
+            description="Token is valid.",
+            examples=[
+                OpenApiExample(
+                    "Valid",
+                    value={},
+                    response_only=True,
+                    status_codes=["200"],
+                )
+            ],
+        ),
+        400: field_error_response(
+            [
+                OpenApiExample(
+                    "Missing token",
+                    value={"token": ["This field is required."]},
+                    response_only=True,
+                    status_codes=["400"],
+                )
+            ]
+        ),
+        401: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="Invalid or expired token.",
+            examples=[
+                OpenApiExample(
+                    "Invalid token",
+                    value={
+                        "detail": "Token is invalid or expired",
+                        "code": "token_not_valid",
+                    },
+                    response_only=True,
+                    status_codes=["401"],
+                )
+            ],
+        ),
+    },
+)
+class TokenVerifyView(SimpleJWTTokenVerifyView):
+    """Check whether a token is valid."""
