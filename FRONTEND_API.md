@@ -1,6 +1,25 @@
-# Inveno API — Frontend Developer Reference
+# API — Frontend Developer Reference
 
-Complete API reference for integrating the Inveno backend into your React (or any frontend) application.
+Auth starter: email login, JWT access token, httpOnly refresh cookie, organisation
+onboarding via Django Admin. No inventory or purchase APIs.
+
+## Start a new project
+
+The GitHub repo name sets the image: `ghcr.io/<owner>/<repo>` (`:dev` on every
+push to `main`, `:latest` and the release version on a GitHub Release).
+
+| What | Where to change it | Starter default |
+|------|--------------------|-----------------|
+| GHCR image | GitHub repo name | `ghcr.io/<owner>/<repo>` |
+| Frontend compose image | `API_IMAGE` in `.env` next to the compose file | `ghcr.io/<owner>/<repo>:dev` |
+| Product name | `PROJECT_NAME` | `API` |
+| Postgres | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | `dev` |
+| Compose project / volume | `name:` and volume in compose files | `dev` / `dev_postgres_data` |
+| Refresh cookie | `REFRESH_COOKIE_NAME` | `dev_refresh` |
+| From-address | `DEFAULT_FROM_EMAIL` | `noreply@localhost` |
+| Frontend URL | `FRONTEND_URL`, `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` |
+
+Keep Postgres values identical in `.env`, `.env.api`, and the compose `db` service.
 
 ---
 
@@ -10,8 +29,6 @@ Complete API reference for integrating the Inveno backend into your React (or an
 |---|---|
 | Local dev (Docker) | `http://localhost:8000` |
 | Production | `https://your-railway-domain.up.railway.app` |
-
-Set this as an environment variable in your React project:
 
 ```env
 # Vite
@@ -27,44 +44,57 @@ REACT_APP_API_URL=http://localhost:8000
 
 | Tool | URL |
 |---|---|
-| Swagger UI (try it in browser) | `http://localhost:8000/api/docs/` |
-| ReDoc (read-friendly) | `http://localhost:8000/api/redoc/` |
+| Swagger UI | `http://localhost:8000/api/docs/` |
+| Frontend guide | `http://localhost:8000/api/docs/frontend/` |
+| ReDoc | `http://localhost:8000/api/redoc/` |
 | Raw OpenAPI schema | `http://localhost:8000/api/schema/` |
+
+Docs routes are superuser-only. Log in at `/admin/` first.
 
 ---
 
 ## Quick Start for Frontend Devs
 
-You don't need to clone or run the backend code. Just use the pre-built Docker image:
+You don't need to clone the API source. Pull the pre-built image:
 
 ```bash
 # 1. Copy the frontend compose file into your React project root
-cp path/to/inveno-api/docker-compose.frontend-dev.yml .
+cp path/to/this-repo/docker-compose.frontend-dev.yml .
 
-# 2. Copy the env example and fill it in
-cp path/to/inveno-api/.env.frontend.example .env.api
+# 2. Django env for the API container
+cp path/to/this-repo/.env.frontend.example .env.api
 
-# 3. Start the API
+# 3. Image name for Compose (next to the compose file — not .env.api)
+echo API_IMAGE=ghcr.io/<owner>/<repo>:dev > .env
+
+# 4. Start the API
 docker compose -f docker-compose.frontend-dev.yml up
-
-# API is now running at http://localhost:8000
 ```
+
+API: http://localhost:8000  
+Mailpit inbox: http://localhost:8025
+
+Create a superuser, add an organisation in `/admin/`, then set the password from
+the welcome email in Mailpit.
 
 ---
 
 ## Request Headers
 
-All requests must include:
+All JSON requests:
 
 ```http
 Content-Type: application/json
 ```
 
-Authenticated requests must also include:
+Authenticated requests:
 
 ```http
 Authorization: Bearer <access_token>
 ```
+
+Cookie requests (`login`, `refresh`, `logout`) must send credentials
+(`withCredentials: true` / `credentials: "include"`).
 
 ---
 
@@ -74,9 +104,8 @@ Authorization: Bearer <access_token>
 
 > **Account creation is admin-only.**  
 > A super admin registers organisations (and their first central admin) through
-> the Django Admin at `/admin/`.  The central admin receives a welcome email
-> with a *Get Started* link.  They click the link, set their password at
-> `POST /api/auth/password/set/`, then log in normally.
+> Django Admin at `/admin/`. The central admin receives a welcome email with a
+> *Get Started* link, sets a password at `POST /api/auth/password/set/`, then logs in.
 
 ```
 [Super admin] creates org + central admin in /admin/
@@ -84,10 +113,10 @@ Authorization: Bearer <access_token>
   → Central admin clicks "Get Started" link
   → POST /api/auth/password/set/  (uid + token from URL + new_password)
   → POST /api/auth/login/         (email + password)
-  → receive { access, refresh }
-Use access token for API calls (expires in 15 min)
-Use refresh token to get a new access token (expires in 7 days)
-On logout → POST /api/auth/logout/ with the refresh token
+  → JSON { access } + httpOnly refresh cookie
+Use the access token for API calls (expires in 15 min)
+POST /api/auth/token/refresh/ with the cookie (empty body) for a new access token
+On logout → POST /api/auth/logout/ (cookie is read and cleared)
 ```
 
 ### JWT Token Claims
@@ -99,8 +128,7 @@ The access token payload includes:
   "user_id": "uuid",
   "user_type": "central_admin",
   "org_id": "uuid-of-org",
-  "org_suffix": "acme_west",
-  ...
+  "org_suffix": "acme_west"
 }
 ```
 
@@ -110,15 +138,12 @@ For super admins: `org_id` and `org_suffix` are `null`.
 
 ### ~~Register (disabled)~~
 
-`POST /api/auth/register/` is **not available**.  Accounts are created by super
+`POST /api/auth/register/` is **not available**. Accounts are created by super
 admins through Django Admin.
 
 ---
 
 ### 1. Set Password — Get-Started Link
-
-Used when a central admin clicks the *Get Started* link in their welcome email.
-The link contains `uid` and `token` query parameters.
 
 ```
 POST /api/auth/password/set/
@@ -147,8 +172,7 @@ POST /api/auth/password/set/
 }
 ```
 
-> The link expires in **7 days** and is **one-time** — it is invalidated once
-> the password is set.
+The link expires in **7 days** and is one-time.
 
 ---
 
@@ -169,41 +193,51 @@ POST /api/auth/login/
 **Success `200`:**
 ```json
 {
-  "access": "eyJ0eXAiOiJKV1QiLCJhbGci...",
-  "refresh": "eyJ0eXAiOiJKV1QiLCJhbGci..."
+  "access": "eyJ0eXAiOiJKV1QiLCJhbGci..."
 }
 ```
+
+Set-Cookie: httpOnly refresh cookie (`REFRESH_COOKIE_NAME`, default `dev_refresh`),
+path `/api/auth/`, SameSite Lax, 7 days. `refresh` is **not** in the JSON body.
 
 **Error `401`:**
 ```json
 { "detail": "No active account found with the given credentials." }
 ```
 
+**Error `400`** (organisation suspended):
+```json
+{
+  "non_field_errors": [
+    "Your organisation has been suspended. Please contact your administrator."
+  ]
+}
+```
+
+**Error `429`:** login is throttled (10/min production, 100/min development).
+
 ---
 
 ### 3. Refresh Access Token
 
-Access tokens expire in **15 minutes**. Use the refresh token to get a new one.
+Access tokens expire in **15 minutes**. Send the cookie; the body is empty.
 
 ```
 POST /api/auth/token/refresh/
 ```
 
-**Request body:**
-```json
-{ "refresh": "<refresh_token>" }
-```
+**Request body:** `{}` — a `refresh` field in JSON is ignored.
 
 **Success `200`:**
 ```json
-{ "access": "new_access_token...", "refresh": "new_refresh_token..." }
+{ "access": "new_access_token..." }
 ```
 
-> Note: `ROTATE_REFRESH_TOKENS = True` — each refresh call returns a **new refresh token**. Store the new one.
+The cookie is rotated. The previous refresh token is blacklisted.
 
 **Error `401`:**
 ```json
-{ "detail": "Token is invalid or expired.", "code": "token_not_valid" }
+{ "detail": "Refresh cookie is missing.", "code": "token_not_valid" }
 ```
 
 ---
@@ -225,17 +259,13 @@ POST /api/auth/token/verify/
 
 ### 5. Logout
 
-Blacklists the refresh token so it can't be used again.
+Blacklists the refresh cookie and clears it. Auth header is optional.
 
 ```
 POST /api/auth/logout/
-Authorization: Bearer <access_token>
 ```
 
-**Request body:**
-```json
-{ "refresh": "<refresh_token>" }
-```
+**Request body:** `{}`
 
 **Success `200`:**
 ```json
@@ -278,7 +308,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-> For super admins `org` is `null`.
+For super admins `org` is `null`.
 
 ---
 
@@ -289,7 +319,6 @@ PATCH /api/auth/me/
 Authorization: Bearer <access_token>
 ```
 
-**Request body (any subset of profile fields):**
 ```json
 {
   "first_name": "Jane",
@@ -298,9 +327,9 @@ Authorization: Bearer <access_token>
 }
 ```
 
-> `email`, `org`, and `user_type` are read-only and cannot be changed via this endpoint.
+`email`, `org`, and `user_type` are read-only.
 
-**Success `200`:** Returns updated object with the new profile values reflected in `profile`.
+**Success `200`:** Returns the updated object.
 
 ---
 
@@ -326,6 +355,8 @@ Authorization: Bearer <access_token>
 { "detail": "Password updated successfully." }
 ```
 
+Outstanding refresh tokens are blacklisted and the cookie is cleared.
+
 **Error `400`:**
 ```json
 { "old_password": ["Old password is incorrect."] }
@@ -343,12 +374,12 @@ POST /api/auth/password/reset/
 { "email": "user@example.com" }
 ```
 
-**Success `200`** (always, even if email doesn't exist — prevents enumeration):
+**Success `200`** (always, even if the email does not exist):
 ```json
 { "detail": "If an account with that email exists, a reset link has been sent." }
 ```
 
-> In **development**, the email is printed to the Docker terminal — check `docker compose logs api`.
+In development, open Mailpit at http://localhost:8025.
 
 ---
 
@@ -371,6 +402,8 @@ POST /api/auth/password/reset/confirm/
 ```json
 { "detail": "Password has been reset successfully." }
 ```
+
+Outstanding refresh tokens for that user are blacklisted.
 
 **Error `400`:**
 ```json
@@ -434,8 +467,6 @@ No authentication required.
 
 ## Rate Limiting
 
-The API enforces rate limits. When exceeded, you receive:
-
 **`429 Too Many Requests`**
 ```json
 { "detail": "Request was throttled. Expected available in 42 seconds." }
@@ -445,14 +476,11 @@ The API enforces rate limits. When exceeded, you receive:
 |---|---|
 | Unauthenticated | 100 requests / day |
 | Authenticated | 1000 requests / day |
-| Auth endpoints (login, register, reset) | 10 requests / min |
-
-**Handling 429 in your app:**
+| Auth endpoints (login, refresh, logout, reset, set-password) | 10 / min (100 / min in development) |
 
 ```js
 if (response.status === 429) {
-  const retryAfter = response.headers.get('Retry-After'); // seconds
-  // Show the user a "too many requests" message
+  const retryAfter = response.headers.get('Retry-After');
 }
 ```
 
@@ -460,7 +488,7 @@ if (response.status === 429) {
 
 ## Pagination
 
-List endpoints return paginated results:
+List endpoints return:
 
 ```json
 {
@@ -471,58 +499,54 @@ List endpoints return paginated results:
 }
 ```
 
-Default page size: **20**. Use `?page=2` to navigate.
+Default page size: **20**. Use `?page=2`.
 
 ---
 
 ## CORS
 
-The API allows requests from these origins by default:
+Default origins:
 
-- `http://localhost:3000` (Create React App)
-- `http://localhost:5173` (Vite)
+- `http://localhost:3000`
+- `http://localhost:5173`
 
-In production, configure `CORS_ALLOWED_ORIGINS` on the server to include your deployed frontend URL.
+`CORS_ALLOW_CREDENTIALS` is on so the refresh cookie is sent. Production:
+set `CORS_ALLOWED_ORIGINS` to the deployed frontend origin(s).
 
 ---
 
-## Token Storage Recommendations
+## Token Storage
 
-| Method | Security | Notes |
-|---|---|---|
-| `httpOnly` cookie | ✅ Best | Safe from XSS. Requires cookie-based auth setup. |
-| In-memory (React state) | ✅ Good | Lost on refresh — pair with silent refresh strategy. |
-| `localStorage` | ⚠️ Risky | Vulnerable to XSS. Avoid for access tokens. |
+| Token | Where |
+|---|---|
+| Access | Memory (React state / context). Put it on `Authorization: Bearer`. |
+| Refresh | HttpOnly cookie set by the API. Browser sends it with `withCredentials`. |
 
-### Recommended pattern (in-memory + refresh cookie)
-
-1. Store `access` token in memory (React context / Zustand / Redux)
-2. Store `refresh` token in an `httpOnly` cookie (set by the server or a BFF)
-3. On page load, call `POST /api/auth/token/refresh/` to get a new access token silently
+Do not put the refresh token in `localStorage` or in a JSON body.
 
 ---
 
 ## Code Examples
 
-### Axios setup (recommended)
+### Axios setup
 
 ```js
-// src/lib/api.js
 import axios from 'axios';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL,
   headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
 });
 
-// Attach access token to every request
+let accessToken = null;
+export const setAccessToken = (t) => { accessToken = t; };
+
 api.interceptors.request.use((config) => {
-  const token = getAccessToken(); // your token getter
-  if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (accessToken) config.headers.Authorization = `Bearer ${accessToken}`;
   return config;
 });
 
-// Auto-refresh on 401
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -530,14 +554,16 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && !original._retry) {
       original._retry = true;
       try {
-        const refresh = getRefreshToken();
-        const { data } = await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/token/refresh/`, { refresh });
-        setAccessToken(data.access);   // store new access token
-        setRefreshToken(data.refresh); // store new refresh token (rotation)
+        const { data } = await axios.post(
+          `${import.meta.env.VITE_API_URL}/api/auth/token/refresh/`,
+          {},
+          { withCredentials: true },
+        );
+        setAccessToken(data.access);
         original.headers.Authorization = `Bearer ${data.access}`;
         return api(original);
       } catch {
-        clearTokens(); // logout
+        setAccessToken(null);
         window.location.href = '/login';
       }
     }
@@ -548,28 +574,12 @@ api.interceptors.response.use(
 export default api;
 ```
 
-### Register
-
-```js
-const register = async (email, password, password2, firstName, lastName) => {
-  const { data } = await api.post('/api/auth/register/', {
-    email,
-    password,
-    password2,
-    first_name: firstName,
-    last_name: lastName,
-  });
-  return data; // { detail: "Account created successfully." }
-};
-```
-
 ### Login
 
 ```js
 const login = async (email, password) => {
   const { data } = await api.post('/api/auth/login/', { email, password });
   setAccessToken(data.access);
-  setRefreshToken(data.refresh);
   return data;
 };
 ```
@@ -579,7 +589,7 @@ const login = async (email, password) => {
 ```js
 const getProfile = async () => {
   const { data } = await api.get('/api/auth/me/');
-  return data; // { id, email, first_name, last_name, full_name, date_joined }
+  return data;
 };
 ```
 
@@ -587,8 +597,8 @@ const getProfile = async () => {
 
 ```js
 const logout = async () => {
-  await api.post('/api/auth/logout/', { refresh: getRefreshToken() });
-  clearTokens();
+  await api.post('/api/auth/logout/');
+  setAccessToken(null);
 };
 ```
 
@@ -597,7 +607,6 @@ const logout = async () => {
 ```js
 const forgotPassword = async (email) => {
   await api.post('/api/auth/password/reset/', { email });
-  // Always resolves — check email for the reset link
 };
 ```
 
@@ -618,17 +627,8 @@ const resetPassword = async (uid, token, newPassword, newPassword2) => {
 
 ## Development Email
 
-In development, emails are **not sent** — they are printed to the API Docker container logs.
-
-To see them:
-
-```bash
-docker compose logs api
-# or watch live
-docker compose logs -f api
-```
-
-You will see the full email body including the password reset link.
+Mailpit inbox: **http://localhost:8025** (SMTP on port 1025). Welcome and reset
+emails land there in development.
 
 ---
 
@@ -637,3 +637,4 @@ You will see the full email body including the password reset link.
 | Version | Date | Notes |
 |---|---|---|
 | 1.0.0 | 2026-09-08 | Initial release |
+| 1.1.0 | 2026-10-02 | HttpOnly refresh cookie, login throttle, cookie-only refresh |
