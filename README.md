@@ -8,6 +8,8 @@ refresh cookie, organisation onboarding, Docker, and GHCR image builds.
 Use this repository as a **GitHub template** (or clone it) for a new backend.
 Rename the starter defaults — they are environment variables and compose names.
 
+This project is licensed under the [MIT License](LICENSE).
+
 ---
 
 ## Start a new project
