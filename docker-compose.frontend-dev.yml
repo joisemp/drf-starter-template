@@ -6,8 +6,11 @@
 #
 # SETUP (one-time):
 #   1. Copy this file into your React project root.
-#   2. Copy .env.frontend.example → .env.api  (get it from the backend repo)
-#   3. Fill in the values in .env.api
+#   2. Copy .env.frontend.example → .env.api  (Django settings for the API container)
+#   3. Put API_IMAGE in a .env file next to this compose file:
+#        API_IMAGE=ghcr.io/<owner>/<repo>:dev
+#      Compose interpolates API_IMAGE from that .env (or the shell).
+#      .env.api is only passed into the API container — it does not set the image.
 #
 # START:
 #   docker compose -f docker-compose.frontend-dev.yml up
@@ -17,13 +20,13 @@
 # ReDoc at:              http://localhost:8000/api/redoc/
 # Mailpit inbox at:      http://localhost:8025
 ###############################################################################
-name: inveno-frontend-dev
+name: frontend-dev
 
 services:
 
   # ── API (pre-built image) ──────────────────────────────────────────────────
   api:
-    image: ghcr.io/joisemp/inveno-backend:dev
+    image: ${API_IMAGE:?Set API_IMAGE to ghcr.io/<owner>/<repo>:dev}
     env_file: .env.api
     ports:
       - "8000:8000"
@@ -40,13 +43,13 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: inveno
-      POSTGRES_USER: inveno
-      POSTGRES_PASSWORD: inveno
+      POSTGRES_DB: ${POSTGRES_DB:-dev}
+      POSTGRES_USER: ${POSTGRES_USER:-dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev}
     volumes:
-      - inveno_postgres_data:/var/lib/postgresql/data
+      - dev_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U inveno"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dev}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -71,4 +74,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  inveno_postgres_data:
+  dev_postgres_data:

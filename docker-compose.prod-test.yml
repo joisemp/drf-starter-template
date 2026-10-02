@@ -3,7 +3,7 @@
 # Mirrors Railway environment — no db/redis containers (use external URLs)
 # Usage: docker compose -f docker-compose.prod-test.yml up --build
 ###############################################################################
-name: inveno-prod-test
+name: prod-test
 
 services:
   api:

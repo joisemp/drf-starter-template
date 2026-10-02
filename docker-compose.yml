@@ -2,7 +2,7 @@
 # Development stack
 # Usage: docker compose up --build
 ###############################################################################
-name: inveno-dev
+name: dev
 
 services:
 
@@ -63,15 +63,15 @@ services:
     image: postgres:16-alpine
     env_file: .env
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-inveno}
-      POSTGRES_USER: ${POSTGRES_USER:-inveno}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inveno}
+      POSTGRES_DB: ${POSTGRES_DB:-dev}
+      POSTGRES_USER: ${POSTGRES_USER:-dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - dev_postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-inveno}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dev}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -98,4 +98,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  dev_postgres_data:

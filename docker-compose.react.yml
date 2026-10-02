@@ -6,19 +6,19 @@
 #   docker compose -f docker-compose.react.yml up --build
 #
 # Requirements:
-#   - This file must sit one level above the `inveno-api/` folder  OR
+#   - This file must sit one level above the API project folder  OR
 #     adjust the `context` path below to point to your API source.
 ###############################################################################
-name: inveno-fullstack
+name: fullstack
 
 services:
 
   # ── API ────────────────────────────────────────────────────────────────────
   api:
     build:
-      context: ./inveno-api          # ← path to the Django API project root
+      context: ./api          # ← path to the Django API project root
       dockerfile: docker/api/Dockerfile
-    env_file: ./inveno-api/.env
+    env_file: ./api/.env
     ports:
       - "8000:8000"
     depends_on:
@@ -45,13 +45,13 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: inveno
-      POSTGRES_USER: inveno
-      POSTGRES_PASSWORD: inveno
+      POSTGRES_DB: ${POSTGRES_DB:-dev}
+      POSTGRES_USER: ${POSTGRES_USER:-dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - dev_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U inveno"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dev}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -68,4 +68,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  dev_postgres_data:

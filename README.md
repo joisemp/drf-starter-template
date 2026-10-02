@@ -1,8 +1,45 @@
-# Inveno API
+# Auth API starter
 
-Production-ready, async-first Django REST Framework API.
+Django REST Framework starter with email login, JWT access tokens, an httpOnly
+refresh cookie, organisation onboarding, Docker, and GHCR image builds.
 
-**Stack:** Django 5 · DRF · PostgreSQL 16 · Redis 7 · Celery · JWT Auth · DigitalOcean Spaces · Railway · GHCR
+**Stack:** Django 5 · DRF · PostgreSQL 16 · Redis 7 · Celery · JWT · Railway · GHCR
+
+Use this repository as a **GitHub template** (or clone it) for a new backend.
+Rename the starter defaults — they are environment variables and compose names.
+
+---
+
+## Start a new project
+
+1. Create a GitHub repo from this template (or clone and push to a new remote).
+   The image name is always `ghcr.io/<owner>/<repo>`.
+2. Copy `.env.example` to `.env` and set `PROJECT_NAME` to your product name.
+3. Change local names if you do not want the `dev` defaults (table below).
+4. Enable GitHub Actions. A push to `main` publishes `:dev`. A GitHub Release
+   publishes `:latest` plus the version tag, then runs `railway redeploy`.
+5. Set `RAILWAY_TOKEN` and `RAILWAY_SERVICE_ID` on **this** repo only when that
+   repo has its own Railway service. Do not copy another project's Railway secrets.
+
+| What | File / variable | Starter default |
+|------|-----------------|-----------------|
+| GHCR image | GitHub repo name (`IMAGE_NAME: ${{ github.repository }}`) | `ghcr.io/<owner>/<repo>` |
+| Tags | workflows | `:dev` on `main`; `:latest` and `{{version}}` on a Release |
+| Frontend compose image | `API_IMAGE` in `.env` next to `docker-compose.frontend-dev.yml` | `ghcr.io/<owner>/<repo>:dev` |
+| Product name (Swagger, emails) | `PROJECT_NAME` | `API` |
+| Postgres | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | `dev` |
+| Compose project | `name:` in compose files | `dev`, `frontend-dev`, `fullstack` |
+| Postgres volume | compose `volumes:` | `dev_postgres_data` |
+| Refresh cookie | `REFRESH_COOKIE_NAME` | `dev_refresh` |
+| From-address | `DEFAULT_FROM_EMAIL` | `noreply@localhost` |
+| Frontend origin | `FRONTEND_URL`, `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` |
+| Optional JWT HMAC | `JWT_SIGNING_KEY` | falls back to `DJANGO_SECRET_KEY` |
+
+Keep `POSTGRES_*` identical in `.env`, `.env.frontend.example` / `.env.api`, and
+the compose `db` service.
+
+Mark the GitHub repository as a **template** so new projects can use
+**Use this template**.
 
 ---
 
@@ -11,10 +48,10 @@ Production-ready, async-first Django REST Framework API.
 ### 1. Clone & configure
 
 ```bash
-git clone https://github.com/YOUR_ORG/inveno-api.git
-cd inveno-api
+git clone https://github.com/<owner>/<repo>.git
+cd <repo>
 cp .env.example .env
-# Edit .env — the defaults work out-of-the-box for local Docker dev
+# Edit PROJECT_NAME and any other defaults you want to change
 ```
 
 ### 2. Start the stack
@@ -27,20 +64,20 @@ docker compose up --build
 |---|---|
 | API | http://localhost:8000 |
 | Swagger UI | http://localhost:8000/api/docs/ |
+| Frontend guide | http://localhost:8000/api/docs/frontend/ |
 | ReDoc | http://localhost:8000/api/redoc/ |
 | Django Admin | http://localhost:8000/admin/ |
+| Mailpit | http://localhost:8025 |
 
 ### 3. Create a superuser
 
 ```bash
-# Local dev stack
 docker compose exec api python manage.py createsuperuser
-
-# Frontend dev stack (using the GHCR image)
-docker compose -f docker-compose.frontend-dev.yml exec api python manage.py createsuperuser
-
-# Enter: email, password (no username — email is the login)
 ```
+
+Log in at `/admin/` and add an organisation. The central admin gets a welcome
+email in Mailpit. They set a password at `POST /api/auth/password/set/`, then
+log in at `POST /api/auth/login/`.
 
 ### 4. Run tests
 
@@ -53,106 +90,81 @@ docker compose exec api pytest
 ## Project Structure
 
 ```
-inveno-api/
 ├── config/                  # Django project package
 │   ├── settings/
-│   │   ├── base.py          # Shared settings
-│   │   ├── development.py   # Dev (console email, colorlog, debug toolbar)
-│   │   └── production.py    # Prod (DO Spaces, JSON logging, HTTPS)
-│   ├── asgi.py              # ASGI entrypoint (uvicorn)
-│   ├── celery.py            # Celery app
-│   └── urls.py              # Root URL config
+│   │   ├── base.py
+│   │   ├── development.py
+│   │   └── production.py
+│   └── urls.py
 ├── apps/
-│   ├── users/               # Custom User model + auth endpoints
-│   └── healthcheck/         # /api/health/ endpoint
-├── tests/                   # pytest test suite
-├── docker/api/              # Dockerfiles + entrypoint
-├── requirements/            # base / development / production
-├── docker-compose.yml           # Dev stack
-├── docker-compose.frontend-dev.yml  # For frontend devs
-├── docker-compose.react.yml         # Full-stack with React
-├── railway.json             # Railway deployment config
-└── .github/workflows/release.yml   # CI/CD pipeline
+│   ├── users/               # Custom User + auth endpoints
+│   ├── organizations/       # Org model + admin onboarding
+│   ├── common/              # Mixins, OpenAPI helpers, frontend guide
+│   └── healthcheck/         # /api/health/
+├── tests/
+├── docker/api/
+├── requirements/
+├── docker-compose.yml
+├── docker-compose.frontend-dev.yml
+├── docker-compose.react.yml
+├── railway.json
+└── .github/workflows/
 ```
 
 ---
 
 ## Environment Variables
 
-See [`.env.example`](.env.example) for the full list with descriptions.
+See [`.env.example`](.env.example). Frontend developers use
+[`.env.frontend.example`](.env.frontend.example).
 
 ### Required for all environments
 
 | Variable | Description |
 |---|---|
-| `DJANGO_SECRET_KEY` | Django secret key (generate with `python -c "import secrets; print(secrets.token_hex(50))"`) |
+| `DJANGO_SECRET_KEY` | Django secret key |
 | `REDIS_URL` | Redis connection URL |
 
-### Local Docker only
+### Local Docker
 
 | Variable | Description |
 |---|---|
-| `POSTGRES_DB` | Database name |
-| `POSTGRES_USER` | Database user |
-| `POSTGRES_PASSWORD` | Database password |
-| `POSTGRES_HOST` | Database host (`db` in Compose) |
-| `POSTGRES_PORT` | Database port (`5432`) |
+| `POSTGRES_DB` | Database name (default `dev`) |
+| `POSTGRES_USER` | Database user (default `dev`) |
+| `POSTGRES_PASSWORD` | Database password (default `dev`) |
+| `POSTGRES_HOST` | `db` in Compose |
+| `POSTGRES_PORT` | `5432` |
 
-### Production only (Railway)
+### Production (Railway)
 
-Railway automatically injects `DATABASE_URL` and `REDIS_URL` when you add Postgres/Redis plugins. Production settings parse `DATABASE_URL` — do not set `POSTGRES_*` on Railway.
+Railway injects `DATABASE_URL` and `REDIS_URL`. Do not set `POSTGRES_*` there.
 
 | Variable | Description |
 |---|---|
-| `DJANGO_SETTINGS_MODULE` | Set to `config.settings.production` |
-| `DJANGO_SECRET_KEY` | Strong secret key |
-| `DJANGO_ALLOWED_HOSTS` | Your Railway domain + custom domain |
-| `DATABASE_URL` | Injected by Railway Postgres (`postgresql://...`) |
-| `CORS_ALLOWED_ORIGINS` | Your frontend URL(s) |
-| `DO_SPACES_KEY` | DigitalOcean Spaces access key |
-| `DO_SPACES_SECRET` | DigitalOcean Spaces secret key |
-| `DO_SPACES_BUCKET` | Spaces bucket name |
-| `DO_SPACES_REGION` | Spaces region (e.g. `nyc3`) |
-| `EMAIL_HOST` | SMTP host |
-| `EMAIL_HOST_USER` | SMTP username |
-| `EMAIL_HOST_PASSWORD` | SMTP password |
+| `DJANGO_SETTINGS_MODULE` | `config.settings.production` |
+| `DJANGO_ALLOWED_HOSTS` | Railway domain + custom domain |
+| `CORS_ALLOWED_ORIGINS` | Deployed frontend origin(s) |
+| `DO_SPACES_*` | DigitalOcean Spaces for static/media |
+| `EMAIL_HOST` / `EMAIL_HOST_USER` / `EMAIL_HOST_PASSWORD` | SMTP |
 
 ---
 
-## Celery (Background Tasks)
+## Celery
 
-Workers and beat scheduler are included in `docker-compose.yml`.
+Workers and beat are in `docker-compose.yml`.
 
-On Railway, deploy the same image as **separate services** with these start commands:
+On Railway, deploy the same image as separate services:
 
 - **Worker:** `celery -A config worker --loglevel=info --concurrency=2`
 - **Beat:** `celery -A config beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler`
 
-Both services share the same `DATABASE_URL` and `REDIS_URL` from Railway plugins.
-
 ---
 
-## DigitalOcean Spaces (Static & Media — Production)
+## DigitalOcean Spaces (production)
 
-Static files and media uploads are served from DigitalOcean Spaces in production.
-
-1. Create a Spaces bucket in your DO account
-2. Set the required env vars (`DO_SPACES_*`) in Railway
-3. Static files are uploaded automatically on deploy via `collectstatic`
-4. Media files are uploaded on user upload
-
-**Bucket CORS** — add this rule in your Spaces bucket settings to allow browser uploads:
-
-```json
-[
-  {
-    "AllowedHeaders": ["*"],
-    "AllowedMethods": ["GET", "HEAD"],
-    "AllowedOrigins": ["https://yourdomain.com"],
-    "MaxAgeSeconds": 3600
-  }
-]
-```
+1. Create a Spaces bucket
+2. Set `DO_SPACES_*` on Railway
+3. `collectstatic` uploads static files on deploy
 
 ---
 
@@ -160,47 +172,37 @@ Static files and media uploads are served from DigitalOcean Spaces in production
 
 ### One-time setup
 
-1. Create a Railway project and add **Postgres** and **Redis** plugins
-2. Add a service → **Deploy from image** → `ghcr.io/YOUR_ORG/inveno-api:latest`
-3. Set all required production env vars in the service settings
-4. Copy the **Deploy Webhook URL** from Railway → Settings → Deploy
-5. Add it as `RAILWAY_WEBHOOK_URL` in your GitHub repo secrets
+1. Create a Railway project and add **Postgres** and **Redis**
+2. Add a service → **Deploy from image** → `ghcr.io/<owner>/<repo>:latest`
+3. Set production env vars
+4. Add GitHub secrets `RAILWAY_TOKEN` and `RAILWAY_SERVICE_ID` on this repo
 
-### Releasing a new version
+### Releasing
 
-```bash
-# Tag and push your release on GitHub
-# GitHub → Releases → Draft a new release → Tag: v1.2.0 → Publish
+Publish a GitHub Release (tag `v1.2.0`). Actions will:
 
-# GitHub Actions will automatically:
-# 1. Build the prod image
-# 2. Push ghcr.io/YOUR_ORG/inveno-api:v1.2.0 + :latest to GHCR
-# 3. Trigger Railway to redeploy with the new image
-```
+1. Build the prod image
+2. Push `ghcr.io/<owner>/<repo>:1.2.0` and `:latest`
+3. Run migrations against a fresh Postgres
+4. `railway redeploy` for this repo's service
 
-### Rollback
-
-In Railway dashboard → Deployments → click any previous deployment → **Redeploy**.
-
-Or update the image tag to a specific version: `ghcr.io/YOUR_ORG/inveno-api:v1.1.0`
+A merge to `main` pushes `ghcr.io/<owner>/<repo>:dev` for frontend compose.
 
 ---
 
 ## Auth
 
-Login uses **email + password** — there is no `username` field.
-
-See [FRONTEND_API.md](FRONTEND_API.md) for the complete API reference for frontend developers.
+Login is **email + password**. Access token in JSON; refresh token in an httpOnly
+cookie. See [FRONTEND_API.md](FRONTEND_API.md) and `/api/docs/frontend/`.
 
 ---
 
 ## Running Tests
 
 ```bash
-# Inside Docker
 docker compose exec api pytest
 
-# Locally (with venv)
+# Locally (venv + Postgres + Redis)
 pip install -r requirements/development.txt
 pytest
 ```
@@ -213,4 +215,4 @@ pytest
 docker compose exec api python manage.py startapp myapp apps/myapp
 ```
 
-Then add `"apps.myapp"` to `LOCAL_APPS` in `config/settings/base.py`.
+Add `"apps.myapp"` to `LOCAL_APPS` in `config/settings/base.py`.
